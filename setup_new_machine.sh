@@ -82,6 +82,77 @@ auto_configure_environment() {
     if [[ -d "$HOME/.local/bin" ]]; then
         export PATH="$HOME/.local/bin:$PATH"
     fi
+    
+    # UCL CS machines: Use /scratch0 for large files (594GB available!)
+    # This avoids hitting the 10GB home quota
+    if [[ -d "/scratch0" ]] && [[ -w "/scratch0" ]]; then
+        SCRATCH_DIR="/scratch0/$USER/GPS-SLAM"
+        mkdir -p "$SCRATCH_DIR"
+        export GPS_SLAM_SCRATCH="$SCRATCH_DIR"
+        echo -e "${GREEN}[SUCCESS]${NC} Using scratch storage: $SCRATCH_DIR"
+    fi
+}
+
+# Setup scratch storage with symlinks (UCL CS machines)
+setup_scratch_storage() {
+    # Skip if no scratch available
+    if [[ -z "${GPS_SLAM_SCRATCH:-}" ]]; then
+        return 0
+    fi
+    
+    log_info "=== Setting up Scratch Storage ==="
+    log_info "Moving large directories to $GPS_SLAM_SCRATCH to save home quota"
+    
+    local scratch_dir="$GPS_SLAM_SCRATCH"
+    mkdir -p "$scratch_dir"
+    
+    # Setup ThirdLibs on scratch
+    if [[ -d "${SCRIPT_DIR}/ThirdLibs" ]] && [[ ! -L "${SCRIPT_DIR}/ThirdLibs" ]]; then
+        log_info "Moving ThirdLibs to scratch..."
+        mv "${SCRIPT_DIR}/ThirdLibs" "$scratch_dir/"
+        ln -s "$scratch_dir/ThirdLibs" "${SCRIPT_DIR}/ThirdLibs"
+        log_success "ThirdLibs moved to scratch"
+    elif [[ ! -e "${SCRIPT_DIR}/ThirdLibs" ]]; then
+        # Create directory on scratch and symlink for fresh setup
+        mkdir -p "$scratch_dir/ThirdLibs"
+        ln -s "$scratch_dir/ThirdLibs" "${SCRIPT_DIR}/ThirdLibs"
+        log_info "ThirdLibs will be stored on scratch"
+    fi
+    
+    # Setup data on scratch
+    if [[ -d "${SCRIPT_DIR}/data" ]] && [[ ! -L "${SCRIPT_DIR}/data" ]]; then
+        log_info "Moving data to scratch..."
+        mv "${SCRIPT_DIR}/data" "$scratch_dir/"
+        ln -s "$scratch_dir/data" "${SCRIPT_DIR}/data"
+        log_success "data moved to scratch"
+    elif [[ ! -e "${SCRIPT_DIR}/data" ]]; then
+        # Create directory on scratch and symlink for fresh setup
+        mkdir -p "$scratch_dir/data"
+        ln -s "$scratch_dir/data" "${SCRIPT_DIR}/data"
+        log_info "data will be stored on scratch"
+    fi
+    
+    # Setup build on scratch (can be large too)
+    if [[ -d "${SCRIPT_DIR}/build" ]] && [[ ! -L "${SCRIPT_DIR}/build" ]]; then
+        log_info "Moving build to scratch..."
+        mv "${SCRIPT_DIR}/build" "$scratch_dir/"
+        ln -s "$scratch_dir/build" "${SCRIPT_DIR}/build"
+        log_success "build moved to scratch"
+    elif [[ ! -e "${SCRIPT_DIR}/build" ]]; then
+        mkdir -p "$scratch_dir/build"
+        ln -s "$scratch_dir/build" "${SCRIPT_DIR}/build"
+        log_info "build will be stored on scratch"
+    fi
+    
+    # Setup output on scratch
+    if [[ ! -e "${SCRIPT_DIR}/output" ]]; then
+        mkdir -p "$scratch_dir/output"
+        ln -s "$scratch_dir/output" "${SCRIPT_DIR}/output"
+        log_info "output will be stored on scratch"
+    fi
+    
+    log_success "Scratch storage configured"
+    log_info "Home quota preserved - large files stored in: $scratch_dir"
 }
 
 # Run auto-configure immediately
@@ -653,6 +724,9 @@ main() {
     fi
     
     check_prerequisites
+    
+    # Setup scratch storage early (UCL CS machines - saves home quota)
+    setup_scratch_storage
     
     if [[ "$BUILD_ONLY" == true ]]; then
         build_thirdlibs
