@@ -3,15 +3,18 @@
 # GPS-SLAM Complete Setup Script
 # 
 # This script sets up GPS-SLAM on a new machine:
-# 1. Downloads ThirdLibs.zip (required third-party libraries)
-# 2. Downloads Replica dataset
-# 3. Downloads GPS_SLAM Indoor dataset (optional)
-# 4. Builds third-party libraries
-# 5. Builds the main project
+# 1. Installs system prerequisites (optional)
+# 2. Downloads ThirdLibs.zip (required third-party libraries)
+# 3. Downloads Replica dataset
+# 4. Downloads GPS_SLAM Indoor dataset (optional)
+# 5. Builds third-party libraries
+# 6. Builds the main project
 #
 # Prerequisites:
-#   - CUDA 12.x installed
-#   - GCC 11.x installed
+#   - Ubuntu 20.04/22.04/24.04
+#   - NVIDIA GPU with drivers installed
+#   - CUDA 12.x installed (use --install-cuda to install)
+#   - GCC 11.x installed (use --install-prereqs to install)
 #   - cmake >= 3.22
 #   - wget, unzip, python3
 #   - OpenGL development libraries
@@ -21,6 +24,8 @@
 #   ./setup_new_machine.sh [options]
 #
 # Options:
+#   --install-prereqs    Install system prerequisites (apt packages, GCC 11)
+#   --install-cuda       Install CUDA 12.4 (requires sudo, reboot after)
 #   --skip-thirdlibs     Skip downloading ThirdLibs.zip
 #   --skip-replica       Skip downloading Replica dataset
 #   --skip-gpsslam       Skip downloading GPS_SLAM Indoor dataset
@@ -52,10 +57,20 @@ SKIP_BUILD=false
 THIRDLIBS_ONLY=false
 DATA_ONLY=false
 BUILD_ONLY=false
+INSTALL_PREREQS=false
+INSTALL_CUDA=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --install-prereqs)
+            INSTALL_PREREQS=true
+            shift
+            ;;
+        --install-cuda)
+            INSTALL_CUDA=true
+            shift
+            ;;
         --skip-thirdlibs)
             SKIP_THIRDLIBS=true
             shift
@@ -110,6 +125,145 @@ log_warn() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Install system prerequisites
+install_prerequisites() {
+    log_info "=== Installing System Prerequisites ==="
+    
+    if [[ $EUID -ne 0 ]]; then
+        log_info "Need sudo access to install packages..."
+    fi
+    
+    sudo apt update
+    
+    # Essential build tools
+    sudo apt install -y \
+        build-essential \
+        cmake \
+        git \
+        wget \
+        curl \
+        unzip \
+        pkg-config \
+        ninja-build
+    
+    # Python
+    sudo apt install -y \
+        python3 \
+        python3-pip \
+        python3-venv \
+        python3-dev
+    
+    # OpenGL and graphics libraries
+    sudo apt install -y \
+        libgl1-mesa-dev \
+        libglu1-mesa-dev \
+        libglew-dev \
+        libglfw3-dev \
+        freeglut3-dev \
+        libxrandr-dev \
+        libxinerama-dev \
+        libxcursor-dev \
+        libxi-dev \
+        libxxf86vm-dev
+    
+    # Image and other libraries
+    sudo apt install -y \
+        libjpeg-dev \
+        libpng-dev \
+        libtiff-dev \
+        libavcodec-dev \
+        libavformat-dev \
+        libswscale-dev \
+        libv4l-dev \
+        libdc1394-dev \
+        libeigen3-dev
+    
+    # Install GCC 11 (required for CUDA compatibility)
+    log_info "Installing GCC 11..."
+    sudo apt install -y gcc-11 g++-11
+    
+    # Set GCC 11 as default
+    sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
+        --slave /usr/bin/g++ g++ /usr/bin/g++-11 \
+        --slave /usr/bin/gcov gcov /usr/bin/gcov-11
+    
+    # Install gdown for Google Drive downloads
+    pip3 install --user gdown
+    
+    log_success "System prerequisites installed"
+    log_info "GCC version: $(gcc --version | head -1)"
+}
+
+# Install CUDA 12.4
+install_cuda() {
+    log_info "=== Installing CUDA 12.4 ==="
+    
+    if command -v nvcc >/dev/null 2>&1; then
+        local cuda_version=$(nvcc --version | grep "release" | awk '{print $6}' | cut -d',' -f1)
+        log_warn "CUDA already installed: $cuda_version"
+        read -p "Do you want to reinstall? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            return 0
+        fi
+    fi
+    
+    # Detect Ubuntu version
+    local ubuntu_version=$(lsb_release -rs)
+    local ubuntu_codename=$(lsb_release -cs)
+    log_info "Detected Ubuntu $ubuntu_version ($ubuntu_codename)"
+    
+    # Determine the correct package
+    local cuda_repo_pkg=""
+    case $ubuntu_version in
+        24.04)
+            cuda_repo_pkg="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb"
+            ;;
+        22.04)
+            cuda_repo_pkg="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
+            ;;
+        20.04)
+            cuda_repo_pkg="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb"
+            ;;
+        *)
+            log_error "Unsupported Ubuntu version: $ubuntu_version"
+            log_info "Please install CUDA manually from: https://developer.nvidia.com/cuda-downloads"
+            return 1
+            ;;
+    esac
+    
+    log_info "Downloading CUDA keyring..."
+    wget -O /tmp/cuda-keyring.deb "$cuda_repo_pkg"
+    sudo dpkg -i /tmp/cuda-keyring.deb
+    sudo apt update
+    
+    log_info "Installing CUDA 12.4..."
+    sudo apt install -y cuda-toolkit-12-4
+    
+    # Add CUDA to PATH
+    log_info "Configuring environment variables..."
+    
+    local cuda_env_script="/etc/profile.d/cuda.sh"
+    echo 'export PATH=/usr/local/cuda-12.4/bin:$PATH' | sudo tee "$cuda_env_script"
+    echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH' | sudo tee -a "$cuda_env_script"
+    
+    # Also add to user's bashrc
+    if ! grep -q "cuda-12.4" ~/.bashrc; then
+        echo '' >> ~/.bashrc
+        echo '# CUDA 12.4' >> ~/.bashrc
+        echo 'export PATH=/usr/local/cuda-12.4/bin:$PATH' >> ~/.bashrc
+        echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+    fi
+    
+    # Source for current session
+    export PATH=/usr/local/cuda-12.4/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
+    
+    log_success "CUDA 12.4 installed"
+    log_warn "Please run 'source ~/.bashrc' or log out and back in to update your PATH"
+    log_info "Then run this script again without --install-cuda to continue setup"
 }
 
 # Check prerequisites
@@ -364,6 +518,20 @@ main() {
     echo "  GPS-SLAM Complete Setup Script"
     echo "=========================================="
     echo ""
+    
+    # Handle prerequisite installation first
+    if [[ "$INSTALL_PREREQS" == true ]]; then
+        install_prerequisites
+    fi
+    
+    if [[ "$INSTALL_CUDA" == true ]]; then
+        install_cuda
+        echo ""
+        log_info "CUDA installation complete. Please run:"
+        echo "  source ~/.bashrc"
+        echo "  ./setup_new_machine.sh"
+        exit 0
+    fi
     
     check_prerequisites
     
