@@ -43,6 +43,7 @@ def process_file(file_path):
         json_path = os.path.join(file_dir, "val", "results.json")
         ssim = None
         psnr = None
+        lpips = None
         if os.path.exists(json_path):
             try:
                 with open(json_path, "r") as jf:

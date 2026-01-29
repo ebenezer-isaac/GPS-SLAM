@@ -67,7 +67,11 @@ Download the raw Replica data as below.
 ```
 bash download_replica.sh
 ```
-We use a custom data format for reading. Therefore, we also provide a Python script `scripts/replica_preprocess.py` to convert the raw Replica data into ours data format. You only need to slightly modify the input/output paths in the script to use it.
+We use a custom data format for reading. Run the helper below to convert the raw Replica dump into the layout consumed by the configs. It will create `data/replica/<scene>` folders, optionally sampling down to 2K frames per scene.
+```
+python3 scripts/replica_preprocess.py --input-root data/Replica_raw --output-root data/replica --frame-count 2000 --overwrite
+```
+Use `--scenes scene0 scene1` to process a subset or drop `--overwrite` to avoid deleting existing outputs.
 
 ### 2.3 GPS_SLAM Indoor
 GPS_SLAM Indoor is a dataset we created using the Kinect Azure camera. It is used in the experimental section of the paper and includes five indoor scenes. The dataset can be downloaded from [BaiduNetDisk](https://pan.baidu.com/s/1YHZn6B781D9ZtFsf0fi9sw?pwd=5964) or [GoogleDrive](https://drive.google.com/file/d/1ZVICqHVdWDO1OvltxGJXuJ2YG4FYNLHD/view?usp=sharing)

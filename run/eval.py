@@ -2,6 +2,7 @@ import os
 import subprocess
 from pathlib import Path
 import argparse
+import sys
 
 
 def main():
@@ -35,7 +36,7 @@ def main():
 
         try:
             result = subprocess.run(
-                ["python", "scripts/metric.py", "-i", str(val_dir)],
+                [sys.executable, "scripts/metric.py", "-i", str(val_dir)],
                 check=True,
                 capture_output=True,
                 text=True,

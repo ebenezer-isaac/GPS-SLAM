@@ -1,17 +1,25 @@
-import numpy as np
-import cv2
-import os
-import shutil
-import re
-from tqdm import tqdm
+import argparse
 import glob
+import math
+import os
+import re
+import shutil
+from pathlib import Path
+from typing import List, Optional
+
+import numpy as np
 
 
-def generate_dir(path):
-    if os.path.exists(path):
+def generate_dir(path: Path, overwrite: bool = False):
+    """Create a clean output directory for a scene."""
+
+    if path.exists():
+        if not overwrite:
+            raise FileExistsError(f"{path} already exists. Use --overwrite to replace it.")
         shutil.rmtree(path)
-    os.makedirs(path)
-    os.mkdir(path + "/camera")
+
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "camera").mkdir(exist_ok=True)
 
 
 def get_color_images(src_dir, dst_dir):
@@ -75,7 +83,7 @@ def sample_and_rename_poses(input_dir, sample_interval=10):
     os.makedirs(temp_dir, exist_ok=True)
     
     new_idx = 0
-    for i in tqdm(range(0, total_poses, sample_interval)):
+    for i in range(0, total_poses, sample_interval):
         if i >= total_poses:
             break
             
@@ -115,7 +123,7 @@ def sample_and_rename_frames(input_dir, sample_interval=10):
     os.makedirs(temp_dir, exist_ok=True)
     
     new_idx = 0
-    for i in tqdm(range(0, total_frames, sample_interval)):
+    for i in range(0, total_frames, sample_interval):
         if i >= total_frames:
             break
             
@@ -149,7 +157,7 @@ def sample_and_rename_depths(input_dir, sample_interval=10):
     os.makedirs(temp_dir, exist_ok=True)
     
     new_idx = 0
-    for i in tqdm(range(0, total_frames, sample_interval)):
+    for i in range(0, total_frames, sample_interval):
         if i >= total_frames:
             break
             
@@ -172,31 +180,109 @@ def sample_and_rename_depths(input_dir, sample_interval=10):
     print("Sampling and renaming completed!")
 
 
-# same for all replica dataset!
-fx = 600
-fy = 600
-cx = 599.5
-cy = 339.5
-w = 1200
-h = 680
-scale = 6553.5
-
-input_dir = "data/Replica_raw/office1" # raw format replica scene dir
-output_dir = "data/replica/office1" # ours format replica scene dir
-frame_sample_num = 2000
-
-generate_dir(output_dir)
-color_poses = get_color_extrinsics(input_dir + "/traj.txt", output_dir + "/camera")
-frame_num = color_poses.shape[0]
-get_color_images((input_dir + "/results"), output_dir + "/camera")
-get_depths((input_dir + "/results"), output_dir + "/depth")
-intrinsics = get_intrinsics(fx, fy, cx, cy)
-np.savetxt(output_dir + "/camera/intrinsics.txt", intrinsics, fmt='%.8f')
-img_shape = np.array([w, h]).astype(np.int32)
-np.savetxt(output_dir + "/camera/img_shape.txt", img_shape, fmt='%d')
+def compute_sample_interval(frame_num: int, target_frames: Optional[int]) -> int:
+    if not target_frames or frame_num <= target_frames:
+        return 1
+    return max(1, math.ceil(frame_num / target_frames))
 
 
-if (frame_num != frame_sample_num):
-    sample_and_rename_poses(os.path.join(output_dir,"camera"),int(frame_num / frame_sample_num))
-    sample_and_rename_frames(os.path.join(output_dir,"camera"),int(frame_num / frame_sample_num))
-    sample_and_rename_depths(os.path.join(output_dir,"depth"),int(frame_num / frame_sample_num))
+def process_scene(scene: str, input_root: Path, output_root: Path, target_frames: int, overwrite: bool):
+    fx = 600
+    fy = 600
+    cx = 599.5
+    cy = 339.5
+    w = 1200
+    h = 680
+
+    input_dir = input_root / scene
+    output_dir = output_root / scene
+
+    if not input_dir.exists():
+        print(f"[skip] {input_dir} does not exist")
+        return False
+
+    traj_path = input_dir / "traj.txt"
+    results_dir = input_dir / "results"
+
+    if not traj_path.exists() or not results_dir.exists():
+        print(f"[skip] {scene}: missing traj.txt or results directory")
+        return False
+
+    print(f"[process] {scene}")
+    generate_dir(output_dir, overwrite=overwrite)
+
+    camera_dir = output_dir / "camera"
+    depth_dir = output_dir / "depth"
+
+    color_poses = get_color_extrinsics(str(traj_path), str(camera_dir))
+    frame_num = color_poses.shape[0]
+
+    get_color_images(str(results_dir), str(camera_dir))
+    get_depths(str(results_dir), str(depth_dir))
+
+    intrinsics = get_intrinsics(fx, fy, cx, cy)
+    np.savetxt(camera_dir / "intrinsics.txt", intrinsics, fmt="%.8f")
+    img_shape = np.array([w, h], dtype=np.int32)
+    np.savetxt(camera_dir / "img_shape.txt", img_shape, fmt="%d")
+
+    interval = compute_sample_interval(frame_num, target_frames)
+    if interval > 1:
+        print(f"Sampling {scene} every {interval} frames to approach {target_frames} frames")
+        sample_and_rename_poses(camera_dir, interval)
+        sample_and_rename_frames(camera_dir, interval)
+        sample_and_rename_depths(depth_dir, interval)
+
+    print(f"[done] {scene}\n")
+    return True
+
+
+def collect_scenes(input_root: Path, requested: Optional[List[str]]) -> List[str]:
+    if requested:
+        return requested
+
+    scenes = [p.name for p in sorted(input_root.iterdir()) if p.is_dir() and not p.name.startswith(".")]
+    return scenes
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Convert Replica raw data into GPS-SLAM format")
+    parser.add_argument("--input-root", type=Path, default=Path("data/Replica_raw"), help="Location of raw Replica scenes")
+    parser.add_argument("--output-root", type=Path, default=Path("data/replica"), help="Destination folder for converted scenes")
+    parser.add_argument(
+        "--scenes",
+        nargs="*",
+        help="Specific scene names to process (default: all subdirectories under input-root)",
+    )
+    parser.add_argument(
+        "--frame-count",
+        type=int,
+        default=2000,
+        help="Approximate number of frames to keep per scene (set <=0 to keep all frames)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacing existing processed scenes",
+    )
+
+    args = parser.parse_args()
+    target_frames = args.frame_count if args.frame_count and args.frame_count > 0 else None
+
+    scenes = collect_scenes(args.input_root, args.scenes)
+    if not scenes:
+        print("No scenes found to process.")
+        return
+
+    args.output_root.mkdir(parents=True, exist_ok=True)
+
+    processed = 0
+    for scene in scenes:
+        success = process_scene(scene, args.input_root, args.output_root, target_frames, args.overwrite)
+        if success:
+            processed += 1
+
+    print(f"Processed {processed} / {len(scenes)} scenes.")
+
+
+if __name__ == "__main__":
+    main()
