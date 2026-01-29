@@ -127,12 +127,119 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Install prerequisites in user space (no sudo required)
+install_prerequisites_user() {
+    log_info "=== User-Space Installation (No Root) ==="
+    
+    # Create local install directory
+    local LOCAL_DIR="${HOME}/.local"
+    mkdir -p "${LOCAL_DIR}/bin" "${LOCAL_DIR}/lib" "${LOCAL_DIR}/include"
+    
+    # Add to PATH if not already there
+    if [[ ":$PATH:" != *":${LOCAL_DIR}/bin:"* ]]; then
+        export PATH="${LOCAL_DIR}/bin:$PATH"
+        echo 'export PATH="${HOME}/.local/bin:$PATH"' >> ~/.bashrc
+    fi
+    
+    # Check what's available on the system
+    log_info "Checking available system tools..."
+    
+    local available_tools=""
+    local missing_tools=""
+    
+    for tool in cmake make gcc g++ python3 pip3 wget curl unzip git; do
+        if command -v $tool >/dev/null 2>&1; then
+            available_tools="$available_tools $tool"
+        else
+            missing_tools="$missing_tools $tool"
+        fi
+    done
+    
+    log_info "Available:$available_tools"
+    if [[ -n "$missing_tools" ]]; then
+        log_warn "Missing:$missing_tools"
+    fi
+    
+    # Check for module system (common on HPC/university clusters)
+    if command -v module >/dev/null 2>&1; then
+        log_info "Module system detected! Checking available modules..."
+        echo ""
+        echo "Try loading these modules (example commands):"
+        echo "  module avail cuda"
+        echo "  module avail gcc"
+        echo "  module avail cmake"
+        echo "  module avail python"
+        echo ""
+        echo "Then load them with:"
+        echo "  module load cuda/12.x"
+        echo "  module load gcc/11.x"
+        echo "  module load cmake"
+        echo "  module load python/3.x"
+        echo ""
+        
+        # Try to list available modules
+        log_info "Available CUDA modules:"
+        module avail cuda 2>&1 | head -20 || true
+        echo ""
+        log_info "Available GCC modules:"
+        module avail gcc 2>&1 | head -20 || true
+    fi
+    
+    # Install pip packages in user space
+    if command -v pip3 >/dev/null 2>&1; then
+        log_info "Installing Python packages in user space..."
+        pip3 install --user gdown numpy pillow
+    elif command -v pip >/dev/null 2>&1; then
+        pip install --user gdown numpy pillow
+    fi
+    
+    # Check CUDA
+    if command -v nvcc >/dev/null 2>&1; then
+        log_success "CUDA found: $(nvcc --version | grep release)"
+    elif [[ -d "/usr/local/cuda" ]]; then
+        log_info "CUDA found at /usr/local/cuda but not in PATH"
+        echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
+        echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+        export PATH=/usr/local/cuda/bin:$PATH
+        export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+    else
+        log_warn "CUDA not found. Check if it's available via module system."
+    fi
+    
+    log_success "User-space setup complete"
+    log_info "Run 'source ~/.bashrc' to update your environment"
+    
+    echo ""
+    echo "=========================================="
+    echo "  UNIVERSITY/HPC CLUSTER INSTRUCTIONS"
+    echo "=========================================="
+    echo ""
+    echo "Since you don't have sudo access, you need to:"
+    echo ""
+    echo "1. Load required modules (if available):"
+    echo "   module load cuda/12.x gcc/11.x cmake python/3.x"
+    echo ""
+    echo "2. If CUDA/GCC are not available as modules,"
+    echo "   contact your system administrator to install them."
+    echo ""
+    echo "3. Once modules are loaded, run:"
+    echo "   ./setup_new_machine.sh --skip-build"
+    echo "   (to download files first)"
+    echo ""
+    echo "4. Then build:"
+    echo "   ./setup_new_machine.sh --build-only"
+    echo ""
+}
+
 # Install system prerequisites
 install_prerequisites() {
     log_info "=== Installing System Prerequisites ==="
     
-    if [[ $EUID -ne 0 ]]; then
-        log_info "Need sudo access to install packages..."
+    # Check if we have sudo access
+    if ! command -v sudo >/dev/null 2>&1 || ! sudo -n true 2>/dev/null; then
+        log_warn "No sudo access detected. Attempting user-space installation..."
+        install_prerequisites_user
+        return $?
     fi
     
     sudo apt update
@@ -271,17 +378,37 @@ check_prerequisites() {
     log_info "Checking prerequisites..."
     
     local missing=()
+    local warnings=()
     
     command -v cmake >/dev/null 2>&1 || missing+=("cmake")
     command -v make >/dev/null 2>&1 || missing+=("make")
-    command -v wget >/dev/null 2>&1 || missing+=("wget")
+    command -v wget >/dev/null 2>&1 || { command -v curl >/dev/null 2>&1 || missing+=("wget or curl"); }
     command -v unzip >/dev/null 2>&1 || missing+=("unzip")
     command -v python3 >/dev/null 2>&1 || missing+=("python3")
     command -v nvcc >/dev/null 2>&1 || missing+=("cuda (nvcc)")
+    command -v gcc >/dev/null 2>&1 || missing+=("gcc")
+    command -v g++ >/dev/null 2>&1 || missing+=("g++")
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing prerequisites: ${missing[*]}"
-        log_info "Please install them before running this script"
+        echo ""
+        
+        # Check for module system
+        if command -v module >/dev/null 2>&1; then
+            log_info "Module system detected. Try loading required modules:"
+            echo ""
+            echo "  module avail                    # List all available modules"
+            echo "  module load cuda                # Load CUDA"
+            echo "  module load gcc/11              # Load GCC 11"
+            echo "  module load cmake               # Load CMake"
+            echo "  module load python              # Load Python"
+            echo ""
+            echo "After loading modules, run this script again."
+            echo ""
+        else
+            log_info "Please install them before running this script"
+            log_info "Or run: ./setup_new_machine.sh --install-prereqs"
+        fi
         exit 1
     fi
     
@@ -289,6 +416,12 @@ check_prerequisites() {
     GCC_VERSION=$(gcc -dumpversion | cut -d. -f1)
     if [[ $GCC_VERSION -lt 11 ]]; then
         log_warn "GCC version $GCC_VERSION detected. GCC 11+ recommended."
+        log_info "Try: module load gcc/11 (if on a cluster)"
+    fi
+    
+    # Show CUDA version
+    if command -v nvcc >/dev/null 2>&1; then
+        log_info "CUDA: $(nvcc --version | grep release | awk '{print $5}' | tr -d ',')"
     fi
     
     log_success "All prerequisites satisfied"
