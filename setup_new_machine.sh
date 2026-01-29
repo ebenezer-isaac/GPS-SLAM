@@ -83,13 +83,34 @@ auto_configure_environment() {
         export PATH="$HOME/.local/bin:$PATH"
     fi
     
-    # UCL CS machines: Use /scratch0 for large files (594GB available!)
-    # This avoids hitting the 10GB home quota
-    if [[ -d "/scratch0" ]] && [[ -w "/scratch0" ]]; then
+    # UCL CS machines: Use project storage or scratch for large files
+    # Priority: 1. Project storage (100GB), 2. scratch0, 3. home (limited)
+    SCRATCH_DIR=""
+    
+    # Check for UCL project storage first (100GB allocated)
+    if [[ -d "/cs/student/project_msc" ]]; then
+        # Try to find user's project directory
+        for project_path in /cs/student/project_msc/2025/seiot/$USER \
+                           /cs/student/project_msc/2025/*/$USER \
+                           /cs/student/project_msc/*/*/$USER; do
+            if [[ -d "$project_path" ]] && [[ -w "$project_path" ]]; then
+                SCRATCH_DIR="$project_path/GPS-SLAM"
+                break
+            fi
+        done
+    fi
+    
+    # Fallback to scratch0 if available
+    if [[ -z "$SCRATCH_DIR" ]] && [[ -d "/scratch0" ]] && [[ -w "/scratch0" ]]; then
         SCRATCH_DIR="/scratch0/$USER/GPS-SLAM"
-        mkdir -p "$SCRATCH_DIR"
-        export GPS_SLAM_SCRATCH="$SCRATCH_DIR"
-        echo -e "${GREEN}[SUCCESS]${NC} Using scratch storage: $SCRATCH_DIR"
+    fi
+    
+    if [[ -n "$SCRATCH_DIR" ]]; then
+        mkdir -p "$SCRATCH_DIR" 2>/dev/null || true
+        if [[ -w "$SCRATCH_DIR" ]]; then
+            export GPS_SLAM_SCRATCH="$SCRATCH_DIR"
+            echo -e "${GREEN}[SUCCESS]${NC} Using storage: $SCRATCH_DIR"
+        fi
     fi
 }
 
