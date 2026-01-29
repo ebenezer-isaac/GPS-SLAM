@@ -86,13 +86,14 @@ auto_configure_environment() {
     # UCL CS machines: Use project storage or scratch for large files
     # Priority: 1. Project storage (100GB), 2. scratch0, 3. home (limited)
     SCRATCH_DIR=""
+    local current_user="${USER:-$(whoami)}"
     
     # Check for UCL project storage first (100GB allocated)
     if [[ -d "/cs/student/project_msc" ]]; then
         # Try to find user's project directory
-        for project_path in /cs/student/project_msc/2025/seiot/$USER \
-                           /cs/student/project_msc/2025/*/$USER \
-                           /cs/student/project_msc/*/*/$USER; do
+        for project_path in "/cs/student/project_msc/2025/seiot/$current_user" \
+                           /cs/student/project_msc/2025/*/"$current_user" \
+                           /cs/student/project_msc/*/*/"$current_user"; do
             if [[ -d "$project_path" ]] && [[ -w "$project_path" ]]; then
                 SCRATCH_DIR="$project_path/GPS-SLAM"
                 break
@@ -102,7 +103,7 @@ auto_configure_environment() {
     
     # Fallback to scratch0 if available
     if [[ -z "$SCRATCH_DIR" ]] && [[ -d "/scratch0" ]] && [[ -w "/scratch0" ]]; then
-        SCRATCH_DIR="/scratch0/$USER/GPS-SLAM"
+        SCRATCH_DIR="/scratch0/$current_user/GPS-SLAM"
     fi
     
     if [[ -n "$SCRATCH_DIR" ]]; then
