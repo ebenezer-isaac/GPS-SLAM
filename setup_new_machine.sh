@@ -3,21 +3,16 @@
 # GPS-SLAM Complete Setup Script
 # 
 # This script sets up GPS-SLAM on a new machine:
-# 1. Installs system prerequisites (optional)
+# 1. Auto-configures CUDA and environment (supports UCL CS machines)
 # 2. Downloads ThirdLibs.zip (required third-party libraries)
 # 3. Downloads Replica dataset
 # 4. Downloads GPS_SLAM Indoor dataset (optional)
 # 5. Builds third-party libraries
 # 6. Builds the main project
 #
-# Prerequisites:
-#   - Ubuntu 20.04/22.04/24.04
-#   - NVIDIA GPU with drivers installed
-#   - CUDA 12.x installed (use --install-cuda to install)
-#   - GCC 11.x installed (use --install-prereqs to install)
-#   - cmake >= 3.22
-#   - wget, unzip, python3
-#   - OpenGL development libraries
+# Tested on:
+#   - UCL CS Remote Workstations (RTX 4090, CUDA in /opt/cuda/)
+#   - Ubuntu 20.04/22.04/24.04 with sudo access
 #
 # Usage:
 #   chmod +x setup_new_machine.sh
@@ -48,6 +43,49 @@ NC='\033[0m' # No Color
 # Script directory
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "${SCRIPT_DIR}"
+
+###############################################################################
+# AUTO-CONFIGURE ENVIRONMENT (UCL CS Machines & common setups)
+###############################################################################
+auto_configure_environment() {
+    echo -e "${BLUE}[INFO]${NC} Auto-configuring environment..."
+    
+    # UCL CS machines: CUDA is in /opt/cuda/cuda-X.X/
+    if [[ -d "/opt/cuda" ]]; then
+        # Find available CUDA versions, prefer 12.4
+        if [[ -d "/opt/cuda/cuda-12.4" ]]; then
+            CUDA_HOME="/opt/cuda/cuda-12.4"
+        else
+            # Use latest available
+            CUDA_HOME=$(ls -d /opt/cuda/cuda-* 2>/dev/null | sort -V | tail -1)
+        fi
+        
+        if [[ -n "$CUDA_HOME" ]] && [[ -f "$CUDA_HOME/bin/nvcc" ]]; then
+            export PATH="$CUDA_HOME/bin:$PATH"
+            export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+            export CUDA_HOME="$CUDA_HOME"
+            echo -e "${GREEN}[SUCCESS]${NC} Configured CUDA from $CUDA_HOME"
+        fi
+    fi
+    
+    # Standard CUDA location: /usr/local/cuda
+    if ! command -v nvcc >/dev/null 2>&1; then
+        if [[ -d "/usr/local/cuda" ]]; then
+            export PATH="/usr/local/cuda/bin:$PATH"
+            export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+            export CUDA_HOME="/usr/local/cuda"
+            echo -e "${GREEN}[SUCCESS]${NC} Configured CUDA from /usr/local/cuda"
+        fi
+    fi
+    
+    # Add user local bin to PATH (for pip packages like gdown)
+    if [[ -d "$HOME/.local/bin" ]]; then
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+}
+
+# Run auto-configure immediately
+auto_configure_environment
 
 # Default options
 SKIP_THIRDLIBS=false
@@ -138,97 +176,45 @@ install_prerequisites_user() {
     # Add to PATH if not already there
     if [[ ":$PATH:" != *":${LOCAL_DIR}/bin:"* ]]; then
         export PATH="${LOCAL_DIR}/bin:$PATH"
-        echo 'export PATH="${HOME}/.local/bin:$PATH"' >> ~/.bashrc
     fi
     
-    # Check what's available on the system
-    log_info "Checking available system tools..."
+    # Update bashrc with all needed environment variables
+    log_info "Updating ~/.bashrc with environment configuration..."
     
-    local available_tools=""
-    local missing_tools=""
+    # Remove old GPS-SLAM config if exists
+    sed -i '/# GPS-SLAM Environment/,/# END GPS-SLAM/d' ~/.bashrc 2>/dev/null || true
     
-    for tool in cmake make gcc g++ python3 pip3 wget curl unzip git; do
-        if command -v $tool >/dev/null 2>&1; then
-            available_tools="$available_tools $tool"
-        else
-            missing_tools="$missing_tools $tool"
-        fi
-    done
+    # Add new config block
+    cat >> ~/.bashrc << 'BASHRC_CONFIG'
+
+# GPS-SLAM Environment (auto-generated)
+export PATH="${HOME}/.local/bin:$PATH"
+
+# CUDA Configuration (UCL CS machines)
+if [[ -d "/opt/cuda/cuda-12.4" ]]; then
+    export CUDA_HOME="/opt/cuda/cuda-12.4"
+    export PATH="$CUDA_HOME/bin:$PATH"
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+elif [[ -d "/usr/local/cuda" ]]; then
+    export CUDA_HOME="/usr/local/cuda"
+    export PATH="$CUDA_HOME/bin:$PATH"
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+fi
+# END GPS-SLAM
+BASHRC_CONFIG
     
-    log_info "Available:$available_tools"
-    if [[ -n "$missing_tools" ]]; then
-        log_warn "Missing:$missing_tools"
-    fi
-    
-    # Check for module system (common on HPC/university clusters)
-    if command -v module >/dev/null 2>&1; then
-        log_info "Module system detected! Checking available modules..."
-        echo ""
-        echo "Try loading these modules (example commands):"
-        echo "  module avail cuda"
-        echo "  module avail gcc"
-        echo "  module avail cmake"
-        echo "  module avail python"
-        echo ""
-        echo "Then load them with:"
-        echo "  module load cuda/12.x"
-        echo "  module load gcc/11.x"
-        echo "  module load cmake"
-        echo "  module load python/3.x"
-        echo ""
-        
-        # Try to list available modules
-        log_info "Available CUDA modules:"
-        module avail cuda 2>&1 | head -20 || true
-        echo ""
-        log_info "Available GCC modules:"
-        module avail gcc 2>&1 | head -20 || true
-    fi
+    log_success "~/.bashrc updated with CUDA configuration"
     
     # Install pip packages in user space
     if command -v pip3 >/dev/null 2>&1; then
-        log_info "Installing Python packages in user space..."
-        pip3 install --user gdown numpy pillow
+        log_info "Installing Python packages (gdown, numpy, pillow)..."
+        pip3 install --user --quiet gdown numpy pillow || pip3 install --user gdown numpy pillow
+        log_success "Python packages installed"
     elif command -v pip >/dev/null 2>&1; then
-        pip install --user gdown numpy pillow
-    fi
-    
-    # Check CUDA
-    if command -v nvcc >/dev/null 2>&1; then
-        log_success "CUDA found: $(nvcc --version | grep release)"
-    elif [[ -d "/usr/local/cuda" ]]; then
-        log_info "CUDA found at /usr/local/cuda but not in PATH"
-        echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
-        echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
-        export PATH=/usr/local/cuda/bin:$PATH
-        export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-    else
-        log_warn "CUDA not found. Check if it's available via module system."
+        pip install --user --quiet gdown numpy pillow || pip install --user gdown numpy pillow
     fi
     
     log_success "User-space setup complete"
-    log_info "Run 'source ~/.bashrc' to update your environment"
-    
-    echo ""
-    echo "=========================================="
-    echo "  UNIVERSITY/HPC CLUSTER INSTRUCTIONS"
-    echo "=========================================="
-    echo ""
-    echo "Since you don't have sudo access, you need to:"
-    echo ""
-    echo "1. Load required modules (if available):"
-    echo "   module load cuda/12.x gcc/11.x cmake python/3.x"
-    echo ""
-    echo "2. If CUDA/GCC are not available as modules,"
-    echo "   contact your system administrator to install them."
-    echo ""
-    echo "3. Once modules are loaded, run:"
-    echo "   ./setup_new_machine.sh --skip-build"
-    echo "   (to download files first)"
-    echo ""
-    echo "4. Then build:"
-    echo "   ./setup_new_machine.sh --build-only"
-    echo ""
 }
 
 # Install system prerequisites
