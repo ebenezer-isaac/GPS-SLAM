@@ -166,7 +166,14 @@ message(STATUS "tinyply_LIBRARIES: ${tinyply_LIBRARY_DIR}")
 
 find_package(Pangolin 0.8 REQUIRED)
 
-find_library(NVML_LIBRARY nvidia-ml PATHS /usr/lib/x86_64-linux-gnu)
+find_library(NVML_LIBRARY nvidia-ml
+    PATHS
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib64
+        ${CUDAToolkit_LIBRARY_DIR}/stubs
+        ${CUDA_TOOLKIT_ROOT_DIR}/targets/x86_64-linux/lib/stubs
+        /opt/cuda/cuda-12.4/targets/x86_64-linux/lib/stubs
+)
 
 ##############################################################
 #####################   gsplat rasterizer
