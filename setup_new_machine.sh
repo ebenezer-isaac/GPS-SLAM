@@ -377,6 +377,11 @@ install_prerequisites() {
     log_info "Installing GCC 11..."
     sudo apt install -y gcc-11 g++-11
     
+    # Install Protobuf (required for tensorboard_logger)
+    log_info "Installing Protobuf..."
+    sudo apt install -y libprotobuf-dev protobuf-compiler
+
+    
     # Set GCC 11 as default
     sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 110 \
         --slave /usr/bin/g++ g++ /usr/bin/g++-11 \
@@ -474,6 +479,8 @@ check_prerequisites() {
     command -v nvcc >/dev/null 2>&1 || missing+=("cuda (nvcc)")
     command -v gcc >/dev/null 2>&1 || missing+=("gcc")
     command -v g++ >/dev/null 2>&1 || missing+=("g++")
+    command -v protoc >/dev/null 2>&1 || missing+=("protoc (protobuf-compiler)")
+
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing prerequisites: ${missing[*]}"
@@ -488,6 +495,8 @@ check_prerequisites() {
             echo "  module load gcc/11              # Load GCC 11"
             echo "  module load cmake               # Load CMake"
             echo "  module load python              # Load Python"
+            echo "  module load protobuf            # Load Protobuf (required)"
+
             echo ""
             echo "After loading modules, run this script again."
             echo ""
@@ -708,6 +717,69 @@ build_thirdlibs() {
     log_success "Third-party libraries built"
 }
 
+# Download and build Protobuf locally if missing
+download_and_build_protobuf() {
+    log_info "=== Checking for Protobuf ==="
+
+    # Check if protoc is already in our local install path
+    local local_protoc="${SCRIPT_DIR}/ThirdLibs/install/bin/protoc"
+    if [[ -x "$local_protoc" ]]; then
+        log_success "Protobuf already built locally at $local_protoc"
+        # Add to PATH for this session
+        export PATH="${SCRIPT_DIR}/ThirdLibs/install/bin:$PATH"
+        export LD_LIBRARY_PATH="${SCRIPT_DIR}/ThirdLibs/install/lib:${LD_LIBRARY_PATH:-}"
+        return 0
+    fi
+
+    # Check system protoc
+    if command -v protoc >/dev/null 2>&1; then
+        local proto_ver=$(protoc --version)
+        log_info "Found system Protobuf: $proto_ver"
+        return 0
+    fi
+
+    log_info "Protobuf not found. Building locally..."
+    
+    local protobuf_version="3.21.12"
+    local protobuf_dir="${SCRIPT_DIR}/ThirdLibs/protobuf"
+    local install_dir="${SCRIPT_DIR}/ThirdLibs/install"
+    
+    mkdir -p "${SCRIPT_DIR}/ThirdLibs"
+    cd "${SCRIPT_DIR}/ThirdLibs"
+
+    # Download source
+    if [[ ! -d "protobuf-${protobuf_version}" ]]; then
+        local zip_name="protobuf-cpp-${protobuf_version}.zip"
+        # Note: GitHub release tag is v21.12 for version 3.21.12
+        local release_tag="v21.12"
+        if [[ ! -f "$zip_name" ]]; then
+            download_file \
+                "https://github.com/protocolbuffers/protobuf/releases/download/${release_tag}/${zip_name}" \
+                "$zip_name" \
+                "Protobuf ${protobuf_version} Source"
+        fi
+        unzip -o "$zip_name"
+    fi
+    
+    # Build
+    cd "protobuf-${protobuf_version}"
+    ./configure --prefix="$install_dir"
+    
+    local jobs=$(nproc)
+    [[ $jobs -gt 8 ]] && jobs=8
+    
+    log_info "Compiling Protobuf (this may take a few minutes)..."
+    make -j"$jobs"
+    make install
+    
+    # Update environment
+    export PATH="${install_dir}/bin:$PATH"
+    export LD_LIBRARY_PATH="${install_dir}/lib:${LD_LIBRARY_PATH:-}"
+    
+    log_success "Protobuf built and installed to $install_dir"
+    cd "${SCRIPT_DIR}"
+}
+
 # Build main project
 build_project() {
     log_info "=== Building GPS-SLAM ==="
@@ -757,6 +829,11 @@ main() {
     # Setup scratch storage early (UCL CS machines - saves home quota)
     setup_scratch_storage
     
+    # Ensure Protobuf is available before building ThirdLibs
+    if [[ "$SKIP_THIRDLIBS" != true ]] || [[ "$THIRDLIBS_ONLY" == true ]] || [[ "$BUILD_ONLY" == true ]]; then
+         download_and_build_protobuf
+    fi
+
     if [[ "$BUILD_ONLY" == true ]]; then
         build_thirdlibs
         build_project

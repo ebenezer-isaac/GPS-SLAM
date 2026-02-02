@@ -68,7 +68,8 @@ build_component "Pangolin" "${THIRDLIB_PATH}/Pangolin" \
 	-DBUILD_TOOLS=ON \
 	-DBUILD_TESTS=OFF
 
-build_component "tensorboard_logger" "${THIRDLIB_PATH}/tensorboard_logger"
+build_component "tensorboard_logger" "${THIRDLIB_PATH}/tensorboard_logger" \
+	-DCMAKE_PREFIX_PATH="${INSTALL_PATH}"
 
 build_component "tinyply" "${THIRDLIB_PATH}/tinyply" \
 	-DBUILD_EXAMPLES=OFF
