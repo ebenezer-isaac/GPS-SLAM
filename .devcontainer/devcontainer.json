@@ -1,0 +1,25 @@
+{
+    "name": "GPS-SLAM Dev Environment",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.cpptools",
+                "ms-vscode.cmake-tools",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "yzhang.markdown-all-in-one"
+            ]
+        }
+    },
+    "remoteUser": "vscode",
+    "mounts": [
+        // forward the SSH agent specifically for seamless authentication if using keys
+        "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,readonly"
+    ]
+}

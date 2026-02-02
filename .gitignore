@@ -9,3 +9,11 @@ ThirdLibs/
 output/
 __pycache__/
 data/
+
+# Large files and logs
+build_gcc11_bak_*/
+*.log
+*.pdf
+build_log.txt
+.connection_config
+.secret_password

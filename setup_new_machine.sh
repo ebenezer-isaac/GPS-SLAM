@@ -127,6 +127,13 @@ setup_scratch_storage() {
     
     local scratch_dir="$GPS_SLAM_SCRATCH"
     mkdir -p "$scratch_dir"
+
+    # Check if we are already in the scratch directory
+    if [[ "$SCRIPT_DIR" == "$scratch_dir" ]]; then
+        log_info "Script is running from scratch storage ($scratch_dir). Skipping move."
+        return 0
+    fi
+
     
     # Setup ThirdLibs on scratch
     if [[ -d "${SCRIPT_DIR}/ThirdLibs" ]] && [[ ! -L "${SCRIPT_DIR}/ThirdLibs" ]]; then
