@@ -154,7 +154,12 @@ setup_scratch_storage() {
         
         # If source is already a symlink, it's done or managed manually
         if [[ -L "$source_path" ]]; then
-            log_info "$dir_name is already a symlink. Skipping move."
+            if [[ ! -e "$source_path" ]]; then
+                 log_warn "$dir_name is a dangling symlink. Re-creating target at $dest_path"
+                 mkdir -p "$dest_path"
+            else
+                 log_info "$dir_name is already a symlink. Skipping move."
+            fi
             return
         fi
 
@@ -739,6 +744,83 @@ build_thirdlibs() {
     log_success "Third-party libraries built"
 }
 
+# Download and build OpenCV locally if missing
+download_and_build_opencv() {
+    log_info "=== Checking for OpenCV ==="
+
+    # Check local install
+    local local_opencv_dir="${SCRIPT_DIR}/ThirdLibs/install/lib/cmake/opencv4"
+    if [[ -d "$local_opencv_dir" ]]; then
+        log_success "OpenCV already built locally"
+        export OpenCV_DIR="$local_opencv_dir"
+        export LD_LIBRARY_PATH="${SCRIPT_DIR}/ThirdLibs/install/lib:${LD_LIBRARY_PATH:-}"
+        return 0
+    fi
+
+    # Check system
+    if [[ -n "${OpenCV_DIR:-}" ]]; then
+        log_info "OpenCV_DIR is set to $OpenCV_DIR"
+        return 0
+    fi
+     # Try pkg-config
+    if pkg-config --exists opencv4; then
+        log_info "Found system OpenCV via pkg-config"
+        return 0
+    fi
+
+    log_info "OpenCV not found. Building locally..."
+    
+    local opencv_version="4.5.5"
+    local thirdlibs_dir="${SCRIPT_DIR}/ThirdLibs"
+    local install_dir="${thirdlibs_dir}/install"
+    
+    mkdir -p "$thirdlibs_dir"
+    cd "$thirdlibs_dir"
+
+    # Download source
+    if [[ ! -d "opencv-${opencv_version}" ]]; then
+        local zip_name="opencv-${opencv_version}.zip"
+        if [[ ! -f "$zip_name" ]]; then
+            download_file \
+                "https://github.com/opencv/opencv/archive/refs/tags/${opencv_version}.zip" \
+                "$zip_name" \
+                "OpenCV ${opencv_version} Source"
+        fi
+        unzip -o "$zip_name"
+    fi
+    
+    # Build
+    cd "opencv-${opencv_version}"
+    mkdir -p build
+    cd build
+    
+    log_info "Configuring OpenCV..."
+    cmake -D CMAKE_BUILD_TYPE=Release \
+          -D CMAKE_INSTALL_PREFIX="$install_dir" \
+          -D BUILD_LIST=core,imgproc,imgcodecs,videoio,highgui,calib3d,features2d \
+          -D BUILD_EXAMPLES=OFF \
+          -D BUILD_TESTS=OFF \
+          -D BUILD_PERF_TESTS=OFF \
+          -D WITH_CUDA=OFF \
+          -D WITH_OPENGL=OFF \
+          -D WITH_QT=OFF \
+          -D WITH_GTK=OFF \
+          ..
+    
+    local jobs=$(nproc)
+    [[ $jobs -gt 8 ]] && jobs=8
+    
+    log_info "Compiling OpenCV (this takes time)..."
+    make -j"$jobs"
+    make install
+    
+    export OpenCV_DIR="${install_dir}/lib/cmake/opencv4"
+    export LD_LIBRARY_PATH="${install_dir}/lib:${LD_LIBRARY_PATH:-}"
+    
+    log_success "OpenCV built and installed to $install_dir"
+    cd "${SCRIPT_DIR}"
+}
+
 # Download and build Protobuf locally if missing
 download_and_build_protobuf() {
     log_info "=== Checking for Protobuf ==="
@@ -851,8 +933,9 @@ main() {
     # Setup scratch storage early (UCL CS machines - saves home quota)
     setup_scratch_storage
     
-    # Ensure Protobuf is available before building ThirdLibs
+    # Ensure Protobuf available
     if [[ "$SKIP_THIRDLIBS" != true ]] || [[ "$THIRDLIBS_ONLY" == true ]] || [[ "$BUILD_ONLY" == true ]]; then
+         download_and_build_opencv
          download_and_build_protobuf
     fi
 
