@@ -137,7 +137,8 @@ set(OpenCV_LIBS opencv_core opencv_imgproc opencv_highgui opencv_calib3d)
 
 ##################### My LIBS ############################
 set(THIRDLIBS_DIR "${CMAKE_SOURCE_DIR}/ThirdLibs/install/lib")
-link_directories(${THIRDLIBS_DIR})
+set(THIRDLIBS_DIR64 "${CMAKE_SOURCE_DIR}/ThirdLibs/install/lib64")
+link_directories(${THIRDLIBS_DIR} ${THIRDLIBS_DIR64})
 
 # yaml-cpp
 set(YAML_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/ThirdLibs/install/include/yaml-cpp")
