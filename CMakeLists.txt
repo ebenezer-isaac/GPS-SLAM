@@ -144,10 +144,16 @@ link_directories(${THIRDLIBS_DIR} ${THIRDLIBS_DIR64})
 set(YAML_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/ThirdLibs/install/include/yaml-cpp")
 
 # tensorboard_logger
+# First find protobuf to get the protoc executable
 find_package(Protobuf REQUIRED)
 set(TENSORBOARD_LOGGER_DIR "${CMAKE_SOURCE_DIR}/ThirdLibs/install")
 find_package(tensorboard_logger REQUIRED REQUIRED HINTS ${TENSORBOARD_LOGGER_DIR})
-# Use the Protobuf_LIBRARIES found by find_package, don't override with hardcoded path
+# Force use of our locally-built protobuf library to match tensorboard_logger ABI
+# The system protobuf may have different ABI causing link errors
+set(Protobuf_LIBRARIES "${CMAKE_SOURCE_DIR}/ThirdLibs/install/lib/libprotobuf.so")
+if(NOT EXISTS ${Protobuf_LIBRARIES})
+    set(Protobuf_LIBRARIES "${CMAKE_SOURCE_DIR}/ThirdLibs/install/lib64/libprotobuf.so")
+endif()
 message(STATUS "Protobuf_VERSION: ${Protobuf_VERSION}")
 message(STATUS "Protobuf_INCLUDE_DIRS: ${Protobuf_INCLUDE_DIRS}")
 message(STATUS "Protobuf_LIBRARIES: ${Protobuf_LIBRARIES}")
