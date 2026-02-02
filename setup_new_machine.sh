@@ -116,6 +116,7 @@ auto_configure_environment() {
 }
 
 # Setup scratch storage with symlinks (UCL CS machines)
+# Setup scratch storage with symlinks (UCL CS machines)
 setup_scratch_storage() {
     # Skip if no scratch available
     if [[ -z "${GPS_SLAM_SCRATCH:-}" ]]; then
@@ -128,52 +129,73 @@ setup_scratch_storage() {
     local scratch_dir="$GPS_SLAM_SCRATCH"
     mkdir -p "$scratch_dir"
 
-    # Check if we are already in the scratch directory
-    if [[ "$SCRIPT_DIR" == "$scratch_dir" ]]; then
+    # Robust check using realpath to prevent self-nesting
+    # This handles cases where SCRIPT_DIR is a logical path (symlink) and scratch_dir is physical
+    local real_script_dir=$(realpath "$SCRIPT_DIR")
+    # remote machines might not have realpath, fallback to readlink -f if needed, but realpath is standard in coreutils
+    if ! command -v realpath >/dev/null 2>&1; then
+        # Fallback for very old systems
+        real_script_dir=$(readlink -f "$SCRIPT_DIR")
+        local real_scratch_dir=$(readlink -f "$scratch_dir")
+    else
+        local real_scratch_dir=$(realpath "$scratch_dir")
+    fi
+
+    if [[ "$real_script_dir" == "$real_scratch_dir" ]]; then
         log_info "Script is running from scratch storage ($scratch_dir). Skipping move."
         return 0
     fi
 
+    # Helper function to safely move directory to scratch
+    safe_move_to_scratch() {
+        local dir_name=$1
+        local source_path="${SCRIPT_DIR}/${dir_name}"
+        local dest_path="${scratch_dir}/${dir_name}"
+        
+        # If source is already a symlink, it's done or managed manually
+        if [[ -L "$source_path" ]]; then
+            log_info "$dir_name is already a symlink. Skipping move."
+            return
+        fi
+
+        # If source doesn't exist, just create dest and link
+        if [[ ! -e "$source_path" ]]; then
+            mkdir -p "$dest_path"
+            ln -s "$dest_path" "$source_path"
+            log_info "$dir_name will be stored on scratch"
+            return
+        fi
+
+        log_info "Moving $dir_name to scratch..."
+        
+        # Check if destination already exists (THE DANGER CASE)
+        if [[ -d "$dest_path" ]]; then
+            log_warn "Destination $dest_path already exists. Merging content..."
+            # Use rsync if available for safe merge
+            if command -v rsync >/dev/null 2>&1; then
+                rsync -a "${source_path}/" "${dest_path}/"
+                rm -rf "$source_path"
+            else
+                # Fallback: copy contents then remove source
+                cp -r "${source_path}/"* "${dest_path}/" 2>/dev/null || true
+                rm -rf "$source_path"
+            fi
+        else
+            # Safe to move entire directory
+            mv "$source_path" "$scratch_dir/"
+        fi
+
+        # Create symlink back
+        ln -s "$dest_path" "$source_path"
+        log_success "$dir_name moved to scratch and linked"
+    }
+
+    # Apply safe move to all large directories
+    safe_move_to_scratch "ThirdLibs"
+    safe_move_to_scratch "data"
+    safe_move_to_scratch "build"
     
-    # Setup ThirdLibs on scratch
-    if [[ -d "${SCRIPT_DIR}/ThirdLibs" ]] && [[ ! -L "${SCRIPT_DIR}/ThirdLibs" ]]; then
-        log_info "Moving ThirdLibs to scratch..."
-        mv "${SCRIPT_DIR}/ThirdLibs" "$scratch_dir/"
-        ln -s "$scratch_dir/ThirdLibs" "${SCRIPT_DIR}/ThirdLibs"
-        log_success "ThirdLibs moved to scratch"
-    elif [[ ! -e "${SCRIPT_DIR}/ThirdLibs" ]]; then
-        # Create directory on scratch and symlink for fresh setup
-        mkdir -p "$scratch_dir/ThirdLibs"
-        ln -s "$scratch_dir/ThirdLibs" "${SCRIPT_DIR}/ThirdLibs"
-        log_info "ThirdLibs will be stored on scratch"
-    fi
-    
-    # Setup data on scratch
-    if [[ -d "${SCRIPT_DIR}/data" ]] && [[ ! -L "${SCRIPT_DIR}/data" ]]; then
-        log_info "Moving data to scratch..."
-        mv "${SCRIPT_DIR}/data" "$scratch_dir/"
-        ln -s "$scratch_dir/data" "${SCRIPT_DIR}/data"
-        log_success "data moved to scratch"
-    elif [[ ! -e "${SCRIPT_DIR}/data" ]]; then
-        # Create directory on scratch and symlink for fresh setup
-        mkdir -p "$scratch_dir/data"
-        ln -s "$scratch_dir/data" "${SCRIPT_DIR}/data"
-        log_info "data will be stored on scratch"
-    fi
-    
-    # Setup build on scratch (can be large too)
-    if [[ -d "${SCRIPT_DIR}/build" ]] && [[ ! -L "${SCRIPT_DIR}/build" ]]; then
-        log_info "Moving build to scratch..."
-        mv "${SCRIPT_DIR}/build" "$scratch_dir/"
-        ln -s "$scratch_dir/build" "${SCRIPT_DIR}/build"
-        log_success "build moved to scratch"
-    elif [[ ! -e "${SCRIPT_DIR}/build" ]]; then
-        mkdir -p "$scratch_dir/build"
-        ln -s "$scratch_dir/build" "${SCRIPT_DIR}/build"
-        log_info "build will be stored on scratch"
-    fi
-    
-    # Setup output on scratch
+    # Setup output on scratch (usually empty start)
     if [[ ! -e "${SCRIPT_DIR}/output" ]]; then
         mkdir -p "$scratch_dir/output"
         ln -s "$scratch_dir/output" "${SCRIPT_DIR}/output"
@@ -181,7 +203,7 @@ setup_scratch_storage() {
     fi
     
     log_success "Scratch storage configured"
-    log_info "Home quota preserved - large files stored in: $scratch_dir"
+    log_info "Large files stored in: $scratch_dir"
 }
 
 # Run auto-configure immediately
@@ -479,7 +501,7 @@ check_prerequisites() {
     command -v nvcc >/dev/null 2>&1 || missing+=("cuda (nvcc)")
     command -v gcc >/dev/null 2>&1 || missing+=("gcc")
     command -v g++ >/dev/null 2>&1 || missing+=("g++")
-    command -v protoc >/dev/null 2>&1 || missing+=("protoc (protobuf-compiler)")
+    # command -v protoc >/dev/null 2>&1 || missing+=("protoc (protobuf-compiler)") # We build this locally if missing
 
     
     if [[ ${#missing[@]} -gt 0 ]]; then
