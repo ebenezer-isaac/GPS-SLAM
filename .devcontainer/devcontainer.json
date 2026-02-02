@@ -18,8 +18,7 @@
         }
     },
     "remoteUser": "vscode",
-    "mounts": [
-        // forward the SSH agent specifically for seamless authentication if using keys
-        "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,readonly"
-    ]
+    // "mounts": [
+    //      "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,readonly"
+    // ]
 }

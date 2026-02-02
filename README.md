@@ -2,6 +2,13 @@
 Zhexi Peng, Kun Zhou, Tianjia Shao
 ![Teaser image](assets/teaser.jpg)
 
+> [!IMPORTANT]
+> **Windows Users**: This project **requires** WSL2 or Dev Containers.
+> *   **Do not** use PowerShell/CMD directly.
+> *   **Do not** use full Visual Studio (MSVC).
+> *   All scripts (`.sh`) are designed for Linux environments.
+> *   Recommended: Open this folder in VS Code and click **"Reopen in Container"**.
+
 This repository contains the official authors implementation associated with the paper "Gaussian-plus-SDF SLAM: High-fidelity 3D Reconstruction at 150+ fps", which can be found [here](https://arxiv.org/abs/2509.11574).
 
 Abstract: *While recent Gaussian-based SLAM methods achieve photorealistic reconstruction from RGB-D data, their computational performance remains a critical bottleneck. State-of-the-art techniques operate at less than 20 fps, significantly lagging behind geometry-based approaches like KinectFusion (hundreds of fps). This limitation stems from the heavy computational burden: modeling scenes requires numerous Gaussians and complex iterative optimization to fit RGB-D data; insufficient Gaussian counts or optimization iterations cause severe quality degradation. To address this, we propose a Gaussian-SDF hybrid representation, combining a colorized signed distance field (SDF) for smooth geometry and appearance with 3D Gaussians to capture underrepresented details. The SDF is efficiently constructed via RGB-D fusion (as in geometry-based methods), while Gaussians undergo iterative optimization. 
