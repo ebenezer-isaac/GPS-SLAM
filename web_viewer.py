@@ -16,6 +16,7 @@ import asyncio
 import base64
 from io import BytesIO
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from socketserver import ThreadingMixIn
 import threading
 import time
 from dataclasses import dataclass, field
@@ -75,27 +76,45 @@ class GPSSLAMClient:
         self.last_frame_time = 0
         self.fps = 0.0
         self.lock = threading.Lock()
+        self._reconnect_attempts = 0
+        self._reconnecting = False
         
     def connect(self) -> bool:
         """Connect to the remote viewer server"""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(5)
+            self.socket.settimeout(10)
             self.socket.connect((self.host, self.port))
             self.connected = True
+            self._reconnect_attempts = 0
             print(f"Connected to {self.host}:{self.port}")
             return True
         except Exception as e:
             print(f"Failed to connect: {e}")
             self.connected = False
             return False
-    
+
     def disconnect(self):
         """Disconnect from server"""
         if self.socket:
-            self.socket.close()
+            try:
+                self.socket.close()
+            except Exception:
+                pass
             self.socket = None
         self.connected = False
+
+    def reconnect(self) -> bool:
+        """Try to reconnect to the server"""
+        self.disconnect()
+        if not hasattr(self, '_reconnect_attempts'):
+            self._reconnect_attempts = 0
+        self._reconnect_attempts += 1
+        # Exponential backoff: 1s, 2s, 4s, max 10s
+        delay = min(2 ** (self._reconnect_attempts - 1), 10)
+        print(f"Reconnecting in {delay}s (attempt {self._reconnect_attempts})...")
+        time.sleep(delay)
+        return self.connect()
     
     def _recv_exact(self, size: int) -> bytes:
         """Receive exactly 'size' bytes from socket"""
@@ -111,7 +130,12 @@ class GPSSLAMClient:
         """Send camera pose and receive rendered frame as JPEG bytes"""
         if not self.connected:
             return None
-            
+
+        # Serialize TCP access - only one frame request at a time
+        if not self.lock.acquire(blocking=False):
+            # Another thread is already requesting a frame, return cached
+            return self.last_frame
+
         try:
             # Send camera pose as JSON
             message = {
@@ -165,15 +189,25 @@ class GPSSLAMClient:
                 self.fps = 1.0 / (now - self.last_frame_time)
             self.last_frame_time = now
             
-            with self.lock:
-                self.last_frame = jpeg_bytes
-            
+            self.last_frame = jpeg_bytes
             return jpeg_bytes
-            
+
         except Exception as e:
             print(f"Error requesting frame: {e}")
             self.connected = False
+            # Auto-reconnect in background (only one thread at a time)
+            if not self._reconnecting:
+                self._reconnecting = True
+                threading.Thread(target=self._do_reconnect, daemon=True).start()
             return None
+        finally:
+            self.lock.release()
+
+    def _do_reconnect(self):
+        """Background reconnection loop"""
+        while not self.connected:
+            self.reconnect()
+        self._reconnecting = False
     
     def update_camera(self, action: str, value: float = 1.0):
         """Update camera based on action"""
@@ -406,23 +440,29 @@ HTML_PAGE = '''<!DOCTYPE html>
                 if (response.ok) {
                     const blob = await response.blob();
                     viewer.src = URL.createObjectURL(blob);
-                    
+
                     const now = Date.now();
                     const latency = now - start;
                     const fps = 1000 / (now - lastFrameTime);
                     lastFrameTime = now;
-                    
+
                     fpsEl.textContent = fps.toFixed(1);
                     latencyEl.textContent = latency + 'ms';
-                    
+
                     statusEl.textContent = 'Connected';
                     statusEl.className = 'status connected';
+                } else {
+                    statusEl.textContent = 'Reconnecting...';
+                    statusEl.className = 'status disconnected';
+                    // Slow down polling when disconnected
+                    await new Promise(r => setTimeout(r, 1000));
                 }
             } catch (e) {
-                statusEl.textContent = 'Disconnected';
+                statusEl.textContent = 'Server unavailable';
                 statusEl.className = 'status disconnected';
+                await new Promise(r => setTimeout(r, 2000));
             }
-            
+
             requestAnimationFrame(fetchFrame);
         }
         
@@ -483,21 +523,26 @@ HTML_PAGE = '''<!DOCTYPE html>
 '''
 
 
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """Handle each request in a new thread"""
+    daemon_threads = True
+
+
 class ViewerHandler(SimpleHTTPRequestHandler):
     """HTTP request handler for the web viewer"""
-    
+
     def log_message(self, format, *args):
         pass  # Suppress logs
-    
+
     def do_GET(self):
         global client
-        
+
         if self.path == '/' or self.path == '/index.html':
             self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.end_headers()
             self.wfile.write(HTML_PAGE.encode())
-            
+
         elif self.path.startswith('/frame'):
             if client and client.connected:
                 frame = client.request_frame()
@@ -508,17 +553,30 @@ class ViewerHandler(SimpleHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(frame)
                     return
-            
+
+            # Not connected or no frame - return 503 with status info
             self.send_response(503)
+            self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            
+            status = "reconnecting" if client and hasattr(client, '_reconnect_attempts') and client._reconnect_attempts > 0 else "disconnected"
+            self.wfile.write(json.dumps({"status": status}).encode())
+
         elif self.path.startswith('/control'):
             if client:
                 action = self.path.split('action=')[-1].split('&')[0]
                 client.update_camera(action)
             self.send_response(200)
             self.end_headers()
-            
+
+        elif self.path == '/status':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "connected": client.connected if client else False,
+                "fps": round(client.fps, 1) if client else 0,
+            }).encode())
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -545,23 +603,23 @@ def main():
     client = GPSSLAMClient(args.host, args.port)
     client.camera.width = args.width
     client.camera.height = args.height
-    # Calculate FOV from Replica office0 intrinsics (fx=600, fy=600)
     import math
     client.camera.fov_x = 2 * math.atan(args.width / (2 * 600))
     client.camera.fov_y = 2 * math.atan(args.height / (2 * 600))
-    
+
     if not client.connect():
-        print("Failed to connect to GPS-SLAM server")
-        print("Make sure the remote_viewer is running and port forwarding is set up")
-        sys.exit(1)
-    
+        print("Failed to connect to GPS-SLAM server - will auto-reconnect")
+        print("Starting web server anyway...")
+        # Start reconnecting in background
+        threading.Thread(target=client.reconnect, daemon=True).start()
+
     print(f"\n{'='*50}")
     print(f"  GPS-SLAM Web Viewer")
     print(f"  Open http://localhost:{args.web_port} in your browser")
     print(f"{'='*50}\n")
-    
-    server = HTTPServer(('0.0.0.0', args.web_port), ViewerHandler)
-    
+
+    server = ThreadedHTTPServer(('0.0.0.0', args.web_port), ViewerHandler)
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

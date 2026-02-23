@@ -103,54 +103,62 @@ int main(int argc, char *argv[])
     float depth_vis_max = pipe.vis_configs["depth_vis_max"].as<float>();
     try
     {
-        // io_service对象
         boost::asio::io_service ios;
-        // 绑定端口6688
         boost::asio::ip::tcp::acceptor acceptor(ios, boost::asio::ip::tcp::endpoint(boost::asio::ip::tcp::v4(), _port));
-        boost::asio::ip::tcp::socket sock(ios);
-        // 阻塞等待socket连接
-        acceptor.accept(sock);
+        // Allow port reuse so we can restart quickly
+        acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true));
 
-        std::cout << "client connected!" << std::endl;
-        int time_stamp = 0;
+        // Outer loop: accept new clients after previous one disconnects
         while (keep_running)
         {
-            // 通过json文件进行通讯, 接收数据，创建相机
-            Camera cam = readMessage(sock);
-            time_stamp++;
-            TensorDict raycast_res = pipe.runRaycastByCam(cam, false);
-            torch::Tensor raycast_color = raycast_res["color_map"];
-            torch::Tensor raycast_depth = raycast_res["depth_map"];
-            TensorDict render_res = model.forward(cam, raycast_depth, raycast_color);
-            torch::Tensor rendered_rgb = torch::clamp(render_res["rgb"], 0, 1);
-            cv::Mat raycast_color_img = tensorToImage(raycast_color);
-            cv::Mat raycast_depth_img = tensorToJetMat(raycast_depth, 0, depth_vis_max, true);
+            std::cout << "Waiting for client on port " << _port << "..." << std::endl;
+            boost::asio::ip::tcp::socket sock(ios);
+            acceptor.accept(sock);
+            std::cout << "client connected!" << std::endl;
+            int time_stamp = 0;
 
-            cv::Mat rendered_color_img = tensorToImage(rendered_rgb);
-            sendImage(sock, rendered_color_img);
-            // send input color
-            cv::Mat input_color_img = rendered_color_img.clone();
-            sendImage(sock, input_color_img);
-            // send raycast color
-            sendImage(sock, raycast_color_img);
-            // send raycast depth
-            sendImage(sock, raycast_depth_img);
-            // send current pose, info and mvp matrix
-            torch::Tensor curr_pose = cam.c2w_slam;
-            auto rot = curr_pose.index({Slice(0, 3), Slice(0, 3)});
-            auto trans = curr_pose.index({Slice(None, 3), Slice(3, 4)});
-            sendTensor(sock, rot);
-            sendTensor(sock, trans);
-            // send string info
-            std::string info = "debug test";
-            sendString(sock, info);
-            // send mvp
-            torch::Tensor mvp = curr_pose;
-            sendTensor(sock, mvp);
+            // Inner loop: serve frames to connected client
+            try
+            {
+                while (keep_running)
+                {
+                    Camera cam = readMessage(sock);
+                    time_stamp++;
+                    TensorDict raycast_res = pipe.runRaycastByCam(cam, false);
+                    torch::Tensor raycast_color = raycast_res["color_map"];
+                    torch::Tensor raycast_depth = raycast_res["depth_map"];
+                    TensorDict render_res = model.forward(cam, raycast_depth, raycast_color);
+                    torch::Tensor rendered_rgb = torch::clamp(render_res["rgb"], 0, 1);
+                    cv::Mat raycast_color_img = tensorToImage(raycast_color);
+                    cv::Mat raycast_depth_img = tensorToJetMat(raycast_depth, 0, depth_vis_max, true);
+
+                    cv::Mat rendered_color_img = tensorToImage(rendered_rgb);
+                    sendImage(sock, rendered_color_img);
+                    cv::Mat input_color_img = rendered_color_img.clone();
+                    sendImage(sock, input_color_img);
+                    sendImage(sock, raycast_color_img);
+                    sendImage(sock, raycast_depth_img);
+                    torch::Tensor curr_pose = cam.c2w_slam;
+                    auto rot = curr_pose.index({Slice(0, 3), Slice(0, 3)});
+                    auto trans = curr_pose.index({Slice(None, 3), Slice(3, 4)});
+                    sendTensor(sock, rot);
+                    sendTensor(sock, trans);
+                    std::string info = "debug test";
+                    sendString(sock, info);
+                    torch::Tensor mvp = curr_pose;
+                    sendTensor(sock, mvp);
+                }
+            }
+            catch (std::exception &e)
+            {
+                std::cout << "Client disconnected: " << e.what() << std::endl;
+                std::cout << "Served " << time_stamp << " frames to this client." << std::endl;
+                // Socket closes automatically, loop back to accept next client
+            }
         }
     }
     catch (std::exception &e)
     {
-        std::cout << "exception: " << e.what() << std::endl;
+        std::cout << "Server error: " << e.what() << std::endl;
     }
 }
