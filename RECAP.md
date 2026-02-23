@@ -246,39 +246,132 @@ The `ucl-tools/remote_commands.sh` has a version that does this automatically.
 
 ---
 
-## Current State (as of end of session)
+## Session 2: Robustness Fixes (23 Feb, continued)
+
+### 13. Remote Viewer Crash-on-Disconnect (ROOT CAUSE FIXED)
+
+**Problem**: The C++ `remote_viewer.cpp` used a single `acceptor.accept(sock)` call followed by a while loop. When ANY client disconnected (even cleanly), boost::asio threw "End of file" or "Connection reset by peer", which was caught by the outer try-catch and **terminated the entire server process**. This meant:
+- Every client disconnect killed the server
+- Only one client could ever connect per server lifetime
+- No way to reconnect without SSH-ing to windcharger and restarting manually
+
+**Fix**: Wrapped the accept + serve logic in an **outer loop**:
+```cpp
+while (keep_running) {
+    // Accept new client
+    boost::asio::ip::tcp::socket sock(ios);
+    acceptor.accept(sock);
+    try {
+        while (keep_running) {
+            // Serve frames...
+        }
+    } catch (std::exception &e) {
+        // Client disconnected - log it and loop back to accept
+        std::cout << "Client disconnected: " << e.what() << std::endl;
+    }
+}
+```
+Also added `SO_REUSEADDR` so the port can be reused immediately after restart.
+
+**Result**: Server now logs "Client disconnected" and goes back to "Waiting for client on port 6688..." instead of crashing. Tested and confirmed working.
+
+### 14. Web Viewer Threading & Auto-Reconnect (ROOT CAUSE FIXED)
+
+**Problem**: `web_viewer.py` used Python's `HTTPServer` which is **single-threaded**. When the browser requested `/frame`, the handler made a synchronous TCP call to the remote_viewer. If that call blocked (slow render, network delay), ALL other HTTP requests (including the initial page load) also blocked, causing the browser to show ERR_EMPTY_RESPONSE.
+
+Additionally, if the TCP connection to remote_viewer dropped, web_viewer stayed disconnected forever with no recovery.
+
+**Fixes applied**:
+1. **ThreadedHTTPServer**: Replaced `HTTPServer` with `ThreadingMixIn + HTTPServer` so each browser request gets its own thread
+2. **TCP lock**: Added `threading.Lock()` around `request_frame()` so only one thread sends/receives on the TCP socket at a time. Other threads get the cached last frame.
+3. **Auto-reconnect**: When the TCP connection drops, a background thread automatically reconnects with exponential backoff (1s, 2s, 4s, max 10s)
+4. **No exit on failure**: Web server starts even if initial connection fails, shows "Reconnecting..." in browser
+5. **Browser-side**: JavaScript shows "Reconnecting..." status and slows polling to 1/sec when disconnected
+
+### 15. Rebuilt and Deployed
+
+- Pushed code to `myfork/ucl-cs-dev`
+- Pulled on windcharger, rebuilt `remote_viewer` binary (`make -j remote_viewer`)
+- Restarted viewer: new binary shows "Waiting for client on port 6688..." after client disconnects
+- Web viewer confirmed serving frames (14KB JPEG per frame through tunnel)
+
+---
+
+## Current State (as of end of session 2)
 
 ### What's Running on Windcharger
-- `remote_viewer` (PID 117990) serving on port 6688
+- `remote_viewer` (PID 121253) serving on port 6688 (rebuilt with reconnect support)
 - Using the full release model: 117,812 Gaussians
 - TSDF engine loaded from `/tmp/tsdf_engine_cache` (fast local disk)
-- GPU: 1771 MiB / 24564 MiB used
+- GPU: ~1983 MiB / 24564 MiB used
 
 ### What's Running in the Dev Container
-- SSH tunnel: `localhost:6688` -> `windcharger:6688` (PID 32182)
-- Web viewer: `localhost:8080` serving the browser UI (PID 35526)
-- Both confirmed working: curl returns HTTP 200
+- SSH tunnel: `localhost:6688` -> `windcharger:6688`
+- Web viewer: `localhost:3000` serving the browser UI
+- Frame endpoint confirmed working: 14,667 bytes JPEG returned
 
-### What Needs to Happen
-1. Forward port 8080 in VS Code PORTS tab
-2. Open `http://localhost:8080` in browser
-3. Use WASD to navigate the 3D reconstructed office scene
+### Browser Confirmed Working
+- Port 3000 forwarded in VS Code PORTS tab
+- `http://localhost:3000` loads the viewer in the browser
+- WASD to navigate the 3D reconstructed office scene
+
+---
+
+## QUICK START: Copy-Paste to Get Viewer Running
+
+### If remote_viewer is already running on windcharger (check first):
+Paste this in the **devcontainer terminal** (VS Code):
+```bash
+# Step 1: SSH tunnel (runs in background, skip if already running)
+ssh -f -N -L 6688:localhost:6688 -o StrictHostKeyChecking=no -J eveerara@knuckles.cs.ucl.ac.uk eveerara@windcharger.cs.ucl.ac.uk 2>/dev/null || echo "Tunnel already exists"
+
+# Step 2: Kill old web viewer if any, start fresh
+pkill -f web_viewer.py 2>/dev/null; sleep 1
+nohup python3 web_viewer.py --host localhost --port 6688 --web-port 3000 > /tmp/web_viewer.log 2>&1 &
+echo "Web viewer started. Forward port 3000 in VS Code PORTS tab, then open http://localhost:3000"
+```
+
+### If remote_viewer needs to be (re)started on windcharger:
+Paste this in the **devcontainer terminal** (VS Code):
+```bash
+# Step 1: Restart remote_viewer on windcharger
+./ucl-tools/run_remote.sh ucl-tools/restart_viewer_clean.sh
+
+# Step 2: SSH tunnel (runs in background)
+ssh -f -N -L 6688:localhost:6688 -o StrictHostKeyChecking=no -J eveerara@knuckles.cs.ucl.ac.uk eveerara@windcharger.cs.ucl.ac.uk 2>/dev/null || echo "Tunnel already exists"
+
+# Step 3: Kill old web viewer if any, start fresh
+pkill -f web_viewer.py 2>/dev/null; sleep 1
+nohup python3 web_viewer.py --host localhost --port 6688 --web-port 3000 > /tmp/web_viewer.log 2>&1 &
+echo "Web viewer started. Forward port 3000 in VS Code PORTS tab, then open http://localhost:3000"
+```
+
+### Then in VS Code:
+1. Go to **PORTS** tab (bottom panel)
+2. Click **Add Port** -> type **3000** -> Enter
+3. Open **http://localhost:3000** in browser
+4. Use **WASD** to move, **Arrow keys** to rotate, **Q/E** for up/down
+
+### Mock server (no GPU, no tunnel, works anywhere):
+```bash
+python3 mock_server.py --mode room &
+python3 web_viewer.py --host localhost --port 6688 --web-port 3000
+# Open http://localhost:3000
+```
 
 ---
 
 ## Next Steps
 
-1. **Commit the resolution fixes**: The viewer_client.py and web_viewer.py FOV/resolution fixes haven't been committed yet
+1. **SCP rendered outputs**: Copy the best evaluation images from windcharger to local for documentation/presentation
 
-2. **SCP rendered outputs**: Copy the best evaluation images from windcharger to local for documentation/presentation
+2. **Flutter viewer** (future): The architecture supports it. Flutter app would use `dart:io Socket` for raw TCP, send camera pose JSON, receive JPEG frames. Server-side rendering means Flutter just displays images - very doable.
 
-3. **Flutter viewer** (future): The architecture supports it. Flutter app would use `dart:io Socket` for raw TCP, send camera pose JSON, receive JPEG frames. Server-side rendering means Flutter just displays images - very doable.
+3. **Live SLAM viewer** (future): Currently the viewer only works post-training (loads a saved model). Integrating it into the live SLAM loop (`slam_pipeline.cpp`) would allow watching reconstruction happen in real-time.
 
-4. **Live SLAM viewer** (future): Currently the viewer only works post-training (loads a saved model). Integrating it into the live SLAM loop (`slam_pipeline.cpp`) would allow watching reconstruction happen in real-time.
+4. **Edge device integration**: When George/Akriti have the Jetson + camera pipeline ready, the same TCP protocol can stream live poses from the edge device to the GPU server.
 
-5. **Edge device integration**: When George/Akriti have the Jetson + camera pipeline ready, the same TCP protocol can stream live poses from the edge device to the GPU server.
-
-6. **Improve web_viewer robustness**: Add auto-reconnect, handle server crashes gracefully, add a "loading" indicator while waiting for first frame.
+5. **True multi-client support** (future): Currently the C++ server handles one client at a time (sequential). Multiple simultaneous viewers would need a thread-per-client or async architecture with shared GPU rendering.
 
 ---
 
@@ -287,14 +380,16 @@ The `ucl-tools/remote_commands.sh` has a version that does this automatically.
 ```
 VIEWERS:
   viewer_client.py          - Desktop viewer (OpenCV, WASD controls)
-  web_viewer.py             - Browser viewer (HTTP on :8080)
+  web_viewer.py             - Browser viewer (HTTP on :3000)
   mock_server.py            - GPU-free mock server
 
 REMOTE TOOLS:
-  ucl-tools/run_remote.sh       - Run commands on windcharger
-  ucl-tools/remote_commands.sh  - Commands to run (edit this)
-  ucl-tools/check_training.sh   - Check training progress
-  run_remote_viewer.sh          - Start/stop/status viewer
+  ucl-tools/run_remote.sh            - Run commands on windcharger
+  ucl-tools/remote_commands.sh       - Commands to run (edit this)
+  ucl-tools/check_training.sh        - Check training progress
+  ucl-tools/restart_viewer_clean.sh  - Kill + restart remote_viewer
+  ucl-tools/check_viewer.sh          - Check remote_viewer status/logs
+  run_remote_viewer.sh               - Start/stop/status viewer
 
 CONFIGS:
   configs/viewer/office0.yaml           - Viewer config (port 6688, release model)

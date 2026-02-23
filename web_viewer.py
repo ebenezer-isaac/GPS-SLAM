@@ -252,6 +252,7 @@ client: Optional[GPSSLAMClient] = None
 HTML_PAGE = '''<!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>GPS-SLAM Viewer</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -366,7 +367,7 @@ HTML_PAGE = '''<!DOCTYPE html>
 </head>
 <body>
     <div class="header">
-        <h1>🌌 GPS-SLAM Viewer</h1>
+        <h1>GPS-SLAM Viewer</h1>
         <div id="status" class="status disconnected">Connecting...</div>
     </div>
     <div class="main">
@@ -374,7 +375,7 @@ HTML_PAGE = '''<!DOCTYPE html>
             <img id="viewer" alt="Waiting for frames...">
         </div>
         <div class="controls">
-            <h3>📊 Stats</h3>
+            <h3>Stats</h3>
             <div class="info-grid">
                 <div class="info-item">
                     <label>FPS</label>
@@ -386,38 +387,38 @@ HTML_PAGE = '''<!DOCTYPE html>
                 </div>
             </div>
             
-            <h3>🎮 Movement</h3>
+            <h3>Movement</h3>
             <div class="keys-grid">
                 <div class="key empty"></div>
-                <div class="key" data-action="forward">W<br>↑</div>
+                <div class="key" data-action="forward">W<br>Fwd</div>
                 <div class="key empty"></div>
-                <div class="key" data-action="left">A<br>←</div>
-                <div class="key" data-action="backward">S<br>↓</div>
-                <div class="key" data-action="right">D<br>→</div>
+                <div class="key" data-action="left">A<br>Left</div>
+                <div class="key" data-action="backward">S<br>Back</div>
+                <div class="key" data-action="right">D<br>Right</div>
             </div>
-            
-            <h3>🔄 Rotation</h3>
+
+            <h3>Rotation</h3>
             <div class="keys-grid">
                 <div class="key empty"></div>
-                <div class="key" data-action="rotate_up">↑</div>
+                <div class="key" data-action="rotate_up">Up</div>
                 <div class="key empty"></div>
-                <div class="key" data-action="rotate_left">←</div>
-                <div class="key" data-action="rotate_down">↓</div>
-                <div class="key" data-action="rotate_right">→</div>
+                <div class="key" data-action="rotate_left">Left</div>
+                <div class="key" data-action="rotate_down">Down</div>
+                <div class="key" data-action="rotate_right">Right</div>
             </div>
-            
+
             <div class="keys-grid" style="grid-template-columns: 1fr 1fr;">
                 <div class="key" data-action="up">Q Up</div>
                 <div class="key" data-action="down">E Down</div>
             </div>
-            
+
             <div class="key" data-action="reset" style="width: 100%; margin-top: 10px;">R - Reset Camera</div>
-            
-            <h3 style="margin-top: 20px;">⌨️ Keyboard</h3>
+
+            <h3 style="margin-top: 20px;">Keyboard</h3>
             <div class="help">
                 <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> - Move<br>
                 <kbd>Q</kbd><kbd>E</kbd> - Up/Down<br>
-                <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> - Rotate<br>
+                Arrow keys - Rotate<br>
                 <kbd>R</kbd> - Reset camera
             </div>
         </div>
