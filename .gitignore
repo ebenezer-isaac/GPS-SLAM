@@ -17,3 +17,5 @@ build_gcc11_bak_*/
 build_log.txt
 .connection_config
 .secret_password
+ucl-tools/remote_output.txt
+ucl-tools/.connection_config
