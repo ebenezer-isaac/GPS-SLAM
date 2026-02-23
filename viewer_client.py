@@ -30,10 +30,10 @@ class Camera:
     """Camera state for the viewer"""
     position: np.ndarray  # x, y, z
     rotation: np.ndarray  # yaw, pitch, roll (in radians)
-    fov_x: float = 1.0  # ~57 degrees
-    fov_y: float = 0.8
-    width: int = 640
-    height: int = 480
+    fov_x: float = 1.5708  # 2*atan(1200/(2*600)) for Replica office0
+    fov_y: float = 1.0297  # 2*atan(680/(2*600)) for Replica office0
+    width: int = 1200
+    height: int = 680
     
     def get_pose_matrix(self) -> np.ndarray:
         """Get 4x4 camera-to-world transformation matrix"""
@@ -347,10 +347,10 @@ def main():
                         help="Server hostname or IP")
     parser.add_argument("--port", type=int, default=6688,
                         help="Server port (default: 6688)")
-    parser.add_argument("--width", type=int, default=640,
-                        help="Render width (default: 640)")
-    parser.add_argument("--height", type=int, default=480,
-                        help="Render height (default: 480)")
+    parser.add_argument("--width", type=int, default=1200,
+                        help="Render width (must match model config, default: 1200)")
+    parser.add_argument("--height", type=int, default=680,
+                        help="Render height (must match model config, default: 680)")
     
     args = parser.parse_args()
     

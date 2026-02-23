@@ -35,10 +35,10 @@ class Camera:
     """Camera state for the viewer"""
     position: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
     rotation: list = field(default_factory=lambda: [0.0, 0.0, 0.0])  # yaw, pitch, roll
-    fov_x: float = 1.0
-    fov_y: float = 0.8
-    width: int = 640
-    height: int = 480
+    fov_x: float = 1.5708  # 2*atan(1200/(2*600)) for Replica office0
+    fov_y: float = 1.0297  # 2*atan(680/(2*600)) for Replica office0
+    width: int = 1200
+    height: int = 680
     
     def get_pose_matrix(self) -> list:
         """Get 4x4 camera-to-world transformation matrix as flat list"""
@@ -535,10 +535,20 @@ def main():
                         help="GPS-SLAM server port")
     parser.add_argument("--web-port", type=int, default=8080,
                         help="Web server port")
+    parser.add_argument("--width", type=int, default=1200,
+                        help="Render width (must match model config, default: 1200)")
+    parser.add_argument("--height", type=int, default=680,
+                        help="Render height (must match model config, default: 680)")
     args = parser.parse_args()
-    
+
     print(f"Connecting to GPS-SLAM server at {args.host}:{args.port}...")
     client = GPSSLAMClient(args.host, args.port)
+    client.camera.width = args.width
+    client.camera.height = args.height
+    # Calculate FOV from Replica office0 intrinsics (fx=600, fy=600)
+    import math
+    client.camera.fov_x = 2 * math.atan(args.width / (2 * 600))
+    client.camera.fov_y = 2 * math.atan(args.height / (2 * 600))
     
     if not client.connect():
         print("Failed to connect to GPS-SLAM server")
