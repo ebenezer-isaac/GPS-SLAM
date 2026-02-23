@@ -137,13 +137,14 @@ class GPSSLAMClient:
             return self.last_frame
 
         try:
-            # Send camera pose as JSON
+            # Send camera pose as JSON (minimal=true skips 3 extra images)
             message = {
                 "fov_x": self.camera.fov_x,
                 "fov_y": self.camera.fov_y,
                 "resolution_x": float(self.camera.width),
                 "resolution_y": float(self.camera.height),
-                "pose": self.camera.get_pose_matrix()
+                "pose": self.camera.get_pose_matrix(),
+                "minimal": True
             }
             
             msg_bytes = json.dumps(message).encode('utf-8')
@@ -159,25 +160,22 @@ class GPSSLAMClient:
             img_size = width * height * 3
             img_data = self._recv_exact(img_size)
             
-            # Skip additional server data (3 more images + tensors + string)
-            for _ in range(3):
-                w = struct.unpack('<I', self._recv_exact(4))[0]
-                h = struct.unpack('<I', self._recv_exact(4))[0]
-                self._recv_exact(w * h * 3)
-            
+            # Minimal protocol: server skips 3 extra images
+            # (old server without minimal support still sends them)
             self._recv_exact(9 * 4)  # rotation
             self._recv_exact(3 * 4)  # translation
             info_len = struct.unpack('<I', self._recv_exact(4))[0]
             self._recv_exact(info_len)  # info string
             self._recv_exact(16 * 4)  # MVP matrix
             
-            # Convert to JPEG
+            # Convert to JPEG (flip vertically to fix coordinate system)
             img_array = np.frombuffer(img_data, dtype=np.uint8).reshape(height, width, 3)
-            
+            img_array = np.flipud(img_array)
+
             if HAS_PIL:
                 img = Image.fromarray(img_array, 'RGB')
                 buffer = BytesIO()
-                img.save(buffer, format='JPEG', quality=85)
+                img.save(buffer, format='JPEG', quality=70)
                 jpeg_bytes = buffer.getvalue()
             else:
                 # Fallback: return raw RGB (less efficient)
@@ -464,9 +462,9 @@ HTML_PAGE = '''<!DOCTYPE html>
                 await new Promise(r => setTimeout(r, 2000));
             }
 
-            requestAnimationFrame(fetchFrame);
+            setTimeout(fetchFrame, 10);
         }
-        
+
         // Send control commands
         async function sendControl(action) {
             try {
@@ -516,8 +514,8 @@ HTML_PAGE = '''<!DOCTYPE html>
             });
         }, 50);
         
-        // Start fetching
-        fetchFrame();
+        // Start fetching after page fully loads (prevents loading spinner)
+        window.addEventListener('load', () => setTimeout(fetchFrame, 100));
     </script>
 </body>
 </html>
@@ -595,16 +593,23 @@ def main():
     parser.add_argument("--web-port", type=int, default=8080,
                         help="Web server port")
     parser.add_argument("--width", type=int, default=1200,
-                        help="Render width (must match model config, default: 1200)")
+                        help="Full model resolution width (default: 1200)")
     parser.add_argument("--height", type=int, default=680,
-                        help="Render height (must match model config, default: 680)")
+                        help="Full model resolution height (default: 680)")
+    parser.add_argument("--downscale", type=int, default=1,
+                        help="Downscale factor (default: 1, must stay 1 for Gaussian model)")
     args = parser.parse_args()
 
+    render_w = args.width // args.downscale
+    render_h = args.height // args.downscale
+
     print(f"Connecting to GPS-SLAM server at {args.host}:{args.port}...")
+    print(f"Render resolution: {render_w}x{render_h} (downscale={args.downscale})")
     client = GPSSLAMClient(args.host, args.port)
-    client.camera.width = args.width
-    client.camera.height = args.height
+    client.camera.width = render_w
+    client.camera.height = render_h
     import math
+    # FOV stays the same regardless of resolution - it's a property of the lens, not the sensor
     client.camera.fov_x = 2 * math.atan(args.width / (2 * 600))
     client.camera.fov_y = 2 * math.atan(args.height / (2 * 600))
 

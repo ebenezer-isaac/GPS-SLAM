@@ -9,18 +9,15 @@ namespace fs = std::filesystem;
 using namespace torch::indexing;
 using namespace torch::autograd;
 
-Camera readMessage(boost::asio::ip::tcp::socket &sock)
+Camera readMessage(boost::asio::ip::tcp::socket &sock, bool &minimal)
 {
     char lengthBuffer[4];
     boost::asio::read(sock, boost::asio::buffer(lengthBuffer, 4));
     int messageLength = *reinterpret_cast<int *>(lengthBuffer);
-    // 读取消息内容
     std::vector<char> messageBuffer(messageLength);
     boost::asio::read(sock, boost::asio::buffer(messageBuffer, messageLength));
-    // 解析 JSON 消息
     std::string messageStr(messageBuffer.begin(), messageBuffer.end());
     json message = json::parse(messageStr);
-    // std::cout << message << std::endl;
     float fov_x = message["fov_x"];
     float fov_y = message["fov_y"];
     float resolution_x = message["resolution_x"];
@@ -29,8 +26,8 @@ Camera readMessage(boost::asio::ip::tcp::socket &sock)
     float fy = resolution_y / (2.0f * tan(fov_y / 2.0f));
     float cx = resolution_x / 2;
     float cy = resolution_y / 2;
+    minimal = message.contains("minimal") && message["minimal"].get<bool>();
     std::vector<float> pose_matrix_data = message["pose"];
-    // client的eigen mat默认列优先，而libtorch tensor默认行优先，读取后需要转置
     torch::Tensor pose_matrix = torch::from_blob(pose_matrix_data.data(), {4, 4}, torch::TensorOptions().dtype(torch::kFloat32)).transpose(0, 1);
     pose_matrix.index({torch::indexing::Slice(), 1}) *= -1;
     pose_matrix.index({torch::indexing::Slice(), 2}) *= -1;
@@ -122,22 +119,27 @@ int main(int argc, char *argv[])
             {
                 while (keep_running)
                 {
-                    Camera cam = readMessage(sock);
+                    bool minimal = false;
+                    Camera cam = readMessage(sock, minimal);
                     time_stamp++;
                     TensorDict raycast_res = pipe.runRaycastByCam(cam, false);
                     torch::Tensor raycast_color = raycast_res["color_map"];
                     torch::Tensor raycast_depth = raycast_res["depth_map"];
                     TensorDict render_res = model.forward(cam, raycast_depth, raycast_color);
                     torch::Tensor rendered_rgb = torch::clamp(render_res["rgb"], 0, 1);
-                    cv::Mat raycast_color_img = tensorToImage(raycast_color);
-                    cv::Mat raycast_depth_img = tensorToJetMat(raycast_depth, 0, depth_vis_max, true);
 
                     cv::Mat rendered_color_img = tensorToImage(rendered_rgb);
                     sendImage(sock, rendered_color_img);
-                    cv::Mat input_color_img = rendered_color_img.clone();
-                    sendImage(sock, input_color_img);
-                    sendImage(sock, raycast_color_img);
-                    sendImage(sock, raycast_depth_img);
+
+                    if (!minimal)
+                    {
+                        cv::Mat raycast_color_img = tensorToImage(raycast_color);
+                        cv::Mat raycast_depth_img = tensorToJetMat(raycast_depth, 0, depth_vis_max, true);
+                        cv::Mat input_color_img = rendered_color_img.clone();
+                        sendImage(sock, input_color_img);
+                        sendImage(sock, raycast_color_img);
+                        sendImage(sock, raycast_depth_img);
+                    }
                     torch::Tensor curr_pose = cam.c2w_slam;
                     auto rot = curr_pose.index({Slice(0, 3), Slice(0, 3)});
                     auto trans = curr_pose.index({Slice(None, 3), Slice(3, 4)});
