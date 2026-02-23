@@ -35,16 +35,33 @@ Camera readMessage(boost::asio::ip::tcp::socket &sock, bool &minimal)
     return cam;
 }
 
-void sendImage(boost::asio::ip::tcp::socket &sock, const cv::Mat &img)
+void sendImage(boost::asio::ip::tcp::socket &sock, const cv::Mat &img, bool compress = false)
 {
-    cv::Mat send_img;
     uint32_t img_width = img.cols;
     uint32_t img_height = img.rows;
     boost::asio::write(sock, boost::asio::buffer(&img_width, sizeof(uint32_t)));
     boost::asio::write(sock, boost::asio::buffer(&img_height, sizeof(uint32_t)));
-    uint32_t img_byte = img_width * img_height * 3;
-    cv::cvtColor(img, send_img, cv::COLOR_BGR2RGB);
-    boost::asio::write(sock, boost::asio::buffer(send_img.data, img_byte));
+
+    if (compress)
+    {
+        // Send JPEG-compressed image (much smaller over network)
+        cv::Mat bgr_img;
+        cv::cvtColor(img, bgr_img, cv::COLOR_BGR2RGB);
+        std::vector<uchar> jpeg_buf;
+        std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 70};
+        cv::imencode(".jpg", img, jpeg_buf, params);
+        uint32_t jpeg_size = jpeg_buf.size();
+        boost::asio::write(sock, boost::asio::buffer(&jpeg_size, sizeof(uint32_t)));
+        boost::asio::write(sock, boost::asio::buffer(jpeg_buf.data(), jpeg_size));
+    }
+    else
+    {
+        // Send raw RGB (original protocol)
+        cv::Mat send_img;
+        uint32_t img_byte = img_width * img_height * 3;
+        cv::cvtColor(img, send_img, cv::COLOR_BGR2RGB);
+        boost::asio::write(sock, boost::asio::buffer(send_img.data, img_byte));
+    }
 }
 
 void sendTensor(boost::asio::ip::tcp::socket &sock, const torch::Tensor &tensor)
@@ -129,7 +146,7 @@ int main(int argc, char *argv[])
                     torch::Tensor rendered_rgb = torch::clamp(render_res["rgb"], 0, 1);
 
                     cv::Mat rendered_color_img = tensorToImage(rendered_rgb);
-                    sendImage(sock, rendered_color_img);
+                    sendImage(sock, rendered_color_img, minimal);
 
                     if (!minimal)
                     {

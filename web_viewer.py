@@ -151,35 +151,32 @@ class GPSSLAMClient:
             length = struct.pack('<I', len(msg_bytes))
             self.socket.sendall(length + msg_bytes)
             
-            # Receive rendered image
+            # Receive rendered image (JPEG compressed in minimal mode)
             width_data = self._recv_exact(4)
             height_data = self._recv_exact(4)
             width = struct.unpack('<I', width_data)[0]
             height = struct.unpack('<I', height_data)[0]
-            
-            img_size = width * height * 3
-            img_data = self._recv_exact(img_size)
-            
-            # Minimal protocol: server skips 3 extra images
-            # (old server without minimal support still sends them)
+
+            # Minimal mode: server sends JPEG (size prefix + JPEG data)
+            jpeg_size = struct.unpack('<I', self._recv_exact(4))[0]
+            jpeg_data = self._recv_exact(jpeg_size)
+
+            # Receive remaining protocol data
             self._recv_exact(9 * 4)  # rotation
             self._recv_exact(3 * 4)  # translation
             info_len = struct.unpack('<I', self._recv_exact(4))[0]
             self._recv_exact(info_len)  # info string
             self._recv_exact(16 * 4)  # MVP matrix
-            
-            # Convert to JPEG (flip vertically to fix coordinate system)
-            img_array = np.frombuffer(img_data, dtype=np.uint8).reshape(height, width, 3)
-            img_array = np.flipud(img_array)
 
+            # Flip vertically to fix coordinate system
             if HAS_PIL:
-                img = Image.fromarray(img_array, 'RGB')
+                img = Image.open(BytesIO(jpeg_data))
+                img = img.transpose(Image.FLIP_TOP_BOTTOM)
                 buffer = BytesIO()
-                img.save(buffer, format='JPEG', quality=70)
+                img.save(buffer, format='JPEG', quality=80)
                 jpeg_bytes = buffer.getvalue()
             else:
-                # Fallback: return raw RGB (less efficient)
-                jpeg_bytes = img_data
+                jpeg_bytes = jpeg_data
             
             # Update stats
             now = time.time()
